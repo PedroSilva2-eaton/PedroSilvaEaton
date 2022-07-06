@@ -1,0 +1,359 @@
+# https://docs.microsoft.com/en-us/azure/devops/pipelines/yaml-schema?view=azure-devops&tabs=schema%2Cparameter-schema#checkout
+# https://docs.microsoft.com/en-us/azure/devops/pipelines/yaml-schema?view=azure-devops&tabs=schema%2Cparameter-schema#bash
+# https://docs.microsoft.com/en-us/azure/devops/pipelines/build/variables?view=azure-devops&tabs=yaml
+# https://docs.microsoft.com/en-us/azure/devops/pipelines/process/expressions?view=azure-devops
+
+parameters:
+- name: pipelineDeployment
+  type: string
+  default: ''
+- name: folder
+  type: string
+  default: ''
+- name: environmentName
+  type: string
+  default: ''
+- name: downloadArtifactName
+  type: string
+  default: ''
+- name: stageDependsOn
+  type: string
+  default: ''
+- name: azureSubscription
+  type: string
+  default: ''
+
+
+stages:
+- stage: ${{ parameters.pipelineDeployment }}_${{ replace(parameters.folder, '-', '_') }}_deploy
+  condition: and(succeeded('${{ parameters.stageDependsOn }}'), eq(dependencies.${{ parameters.stageDependsOn }}.outputs['terraform.plan.exists_in_stage'], 'yes'))
+  dependsOn: ${{ parameters.stageDependsOn }}
+  jobs:
+  - deployment: terraform
+    #condition: eq(stageDependencies.${{ parameters.stageDependsOn }}.terraform.outputs['plan.exists_in_stage'], 'yes')
+    displayName: '${{parameters.pipelineDeployment}}: deploy'
+#    pool:
+#      ${{ if eq(parameters.pipelineDeployment, 'qa') }}:
+#        name: 'bems-qa-aci-linux-ado-agents'
+#      ${{ if eq(parameters.pipelineDeployment, 'prd') }}:
+#        name: 'bems-prd-aci-linux-ado-agents'
+    variables:
+    - name: agent_job_ip
+      value: ''
+    - name: agent_job_ip_netmask
+      value: ''
+    environment: ${{ parameters.environmentName }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: none
+          - task: DownloadBuildArtifacts@0
+            inputs:
+              buildType: 'current'
+              downloadType: 'single'
+              artifactName: '${{parameters.downloadArtifactName}}'
+              downloadPath: '$(System.ArtifactsDirectory)'
+            displayName: 'Download Terraform plan artifact'
+          - task: ExtractFiles@1
+            inputs:
+              archiveFilePatterns: '$(System.ArtifactsDirectory)/${{parameters.downloadArtifactName}}/$(Build.BuildId).tgz'
+              destinationFolder: '$(System.DefaultWorkingDirectory)'
+              cleanDestinationFolder: false
+              overwriteExistingFiles: true
+            displayName: 'Extract Terraform plan artifact'
+#          - task: AzureCLI@2
+#            condition: contains(variables['Agent.Name'], 'aci-linux-ado-agents')
+#            inputs:
+#              azureSubscription: ${{ parameters.azureSubscription }}
+#              scriptType: 'bash'
+#              scriptLocation: 'inlineScript'
+#              inlineScript: |
+#                set -euo pipefail
+#                #set -x
+#                # Agent VM IP
+#                ipAddress=""
+#                while [[ -z ${ipAddress} ]]; do
+#                  # az aks update --api-server-authorized-ip-ranges must be global non-reserved addresses or CIDRs
+#                  #ipAddress=$(ip -o -4 addr list eth0 | awk '{print $4}' | cut -d/ -f1)
+#                  ipAddress=$(curl -s checkip.dyndns.org | sed -e 's/.*Current IP Address: //' -e 's/<.*$//')
+#                done
+#                ipAddressNetmask="${ipAddress}/32"
+#                # aks
+#                aksListJson=$(az aks list -o json)
+#                for aks in $(echo "${aksListJson}" | jq -r '.[] | select (.agentPoolProfiles[] |.tags // empty | has("terraform")) | .name'); do
+#                  echo -e "Checking ${aks} for its authorized IP ranges ..."
+#                  resourceGroup=""
+#                  resourceGroup=$(echo "${aksListJson}" | jq -r ".[] | select (.name == \"${aks}\") | .resourceGroup")
+#                  authorizedIpRangesJson=""
+#                  authorizedIpRangesJson=$(echo "${aksListJson}" | jq -r ".[] | .apiServerAccessProfile | select (.authorizedIpRanges | length > 0) | .authorizedIpRanges")
+#                  addIp=0
+#                  if [[ -n "${authorizedIpRangesJson}" ]]; then
+#                    authorizedIP=""
+#                    authorizedIP=$(echo "${authorizedIpRangesJson}" | jq -r ".[] | select(. | contains(\"${ipAddressNetmask}\"))")
+#                    if [[ -z "${authorizedIP}" ]]; then
+#                      addIp=1
+#                    fi
+#                  else
+#                    addIp=1
+#                  fi
+#                  if [[ ${addIp} -eq 1 ]]; then
+#                    echo -e "\tUpdating aks to include ${ipAddressNetmask} in its authorized IP ranges..."
+#                    updatedAuthorizedIpRanges=""
+#                    updatedAuthorizedIpRanges=$(echo "${authorizedIpRangesJson}" | jq -r ". += [\"${ipAddressNetmask}\"] | join(\",\")")
+#                    az aks update -n "${aks}" -g "${resourceGroup}" --api-server-authorized-ip-ranges ${updatedAuthorizedIpRanges} -o none
+#                    echo -e "\tChecking access to it..."
+#                    az aks get-credentials --resource-group ${resourceGroup} --name ${aks} >/dev/null 2>&1
+#                    set +e
+#                    #kubectl get nodes -v 7 --request-timeout='5s' >/dev/null 2>&1
+#                    kubectl get nodes --request-timeout='5s' >/dev/null 2>&1
+#                    while [[ $? -ne 0 ]]; do
+#                      sleep 5
+#                      kubectl get nodes --request-timeout='5s' >/dev/null 2>&1
+#                    done
+#                    set -e
+#                  fi
+#                done
+#                #define output variable to be used in last azure cli task
+#                echo "##vso[task.setvariable variable=agent_job_ip;]$ipAddress"
+#                echo "##vso[task.setvariable variable=agent_job_ip_netmask;]$ipAddressNetmask"
+#            displayName: 'Allow azure devops vm agent to access various restricted azure resources'
+#            enabled: true
+#          - task: AzureCLI@2
+#            condition: not(contains(variables['Agent.Name'], 'aci-linux-ado-agents'))
+#            inputs:
+#              azureSubscription: ${{ parameters.azureSubscription }}
+#              scriptType: 'bash'
+#              scriptLocation: 'inlineScript'
+#              inlineScript: |
+#                set -euo pipefail
+#                #set -x
+#                # Agent VM IP
+#                ipAddress=""
+#                while [[ -z ${ipAddress} ]]; do
+#                  ipAddress=$(curl -s checkip.dyndns.org | sed -e 's/.*Current IP Address: //' -e 's/<.*$//')
+#                done
+#                ipAddressNetmask="${ipAddress}/32"
+#                # storage accounts
+#                storageAccountListJson=$(az storage account list -o json)
+#                for storageAccount in $(echo "${storageAccountListJson}" | jq -r '.[] | select (.tags | (has("terraform") and (has("databricks-environment") | not))) | .name'); do
+#                  echo -e "Checking ${storageAccount} for its authorized IP ranges ..."
+#                  resourceGroup=""
+#                  resourceGroup=$(echo "${storageAccountListJson}" | jq -r ".[] | select (.name == \"${storageAccount}\") | .resourceGroup")
+#                  networkListJson=""
+#                  networkListJson=$(az storage account network-rule list -n "${storageAccount}" -g "${resourceGroup}")
+#                  addIp=0
+#                  if [[ -n "${networkListJson}" ]]; then
+#                    authorizedIP=""
+#                    authorizedIP=$(echo "${networkListJson}" | jq -r ".ipRules[] | select( .action == \"Allow\" ) | .ipAddressOrRange " | jq --raw-input . | jq --slurp . | jq -r "select(.[] | contains(\"${ipAddress}\"))")
+#                    if [[ -z "${authorizedIP}" ]]; then
+#                      addIp=1
+#                    fi
+#                  else
+#                    addIp=1
+#                  fi
+#                  if [[ ${addIp} -eq 1 ]]; then
+#                    echo -e "\tAdding ip ${ipAddressNetmask} to its authorized IP ranges..."
+#                    az storage account network-rule add -n ${storageAccount} -g ${resourceGroup} --ip-address ${ipAddress} -o none
+#                    echo -e "\tChecking access to it..."
+#                    set +e
+#                    az storage container list  --account-name ${storageAccount} --auth-mode login -o none >/dev/null 2>&1
+#                    while [[ $? -ne 0 ]]; do
+#                      sleep 5
+#                      az storage container list  --account-name ${storageAccount} --auth-mode login -o none >/dev/null 2>&1
+#                    done
+#                    set -e
+#                  fi
+#                done
+#                # key vault
+#                keyVaultListJson=$(az keyvault list -o json)
+#                for keyVault in $(echo "${keyVaultListJson}" | jq -r '.[] | select (.tags | has("terraform")) | .name'); do
+#                  echo -e "Checking ${keyVault} for its authorized IP ranges ..."
+#                  resourceGroup=""
+#                  resourceGroup=$(echo "${keyVaultListJson}" | jq -r ".[] | select (.name == \"${keyVault}\") | .resourceGroup")
+#                  networkListJson=""
+#                  networkListJson=$(az keyvault network-rule list -n "${keyVault}" -g "${resourceGroup}")
+#                  addIp=0
+#                  if [[ -n "${networkListJson}" ]]; then
+#                    authorizedIP=""
+#                    authorizedIP=$(echo "${networkListJson}" | jq -r "select( .defaultAction == \"Deny\" ) | .ipRules[] | select(.value | contains(\"${ipAddressNetmask}\"))")
+#                    if [[ -z "${authorizedIP}" ]]; then
+#                      addIp=1
+#                    fi
+#                  else
+#                    addIp=1
+#                  fi
+#                  if [[ ${addIp} -eq 1 ]]; then
+#                    echo -e "\tAdding ip ${ipAddressNetmask} to its authorized IP ranges..."
+#                    az keyvault network-rule add -n "${keyVault}" -g "${resourceGroup}" --ip-address ${ipAddressNetmask} -o none
+#                    echo -e "\tChecking access to it..."
+#                    set +e
+#                    az keyvault secret list --vault-name ${keyVault} -o none >/dev/null 2>&1
+#                    while [[ $? -ne 0 ]]; do
+#                      echo -n "."
+#                      sleep 5
+#                      az keyvault secret list --vault-name ${keyVault} -o none >/dev/null 2>&1
+#                    done
+#                    set -e
+#                  fi
+#                done
+#                # aks
+#                aksListJson=$(az aks list -o json)
+#                for aks in $(echo "${aksListJson}" | jq -r '.[] | select (.agentPoolProfiles[] |.tags // empty | has("terraform")) | .name'); do
+#                  echo -e "Checking ${aks} for its authorized IP ranges ..."
+#                  resourceGroup=""
+#                  resourceGroup=$(echo "${aksListJson}" | jq -r ".[] | select (.name == \"${aks}\") | .resourceGroup")
+#                  authorizedIpRangesJson=""
+#                  authorizedIpRangesJson=$(echo "${aksListJson}" | jq -r ".[] | .apiServerAccessProfile | select (.authorizedIpRanges | length > 0) | .authorizedIpRanges")
+#                  addIp=0
+#                  if [[ -n "${authorizedIpRangesJson}" ]]; then
+#                    authorizedIP=""
+#                    authorizedIP=$(echo "${authorizedIpRangesJson}" | jq -r ".[] | select(. | contains(\"${ipAddressNetmask}\"))")
+#                    if [[ -z "${authorizedIP}" ]]; then
+#                      addIp=1
+#                    fi
+#                  else
+#                    addIp=1
+#                  fi
+#                  if [[ ${addIp} -eq 1 ]]; then
+#                    echo -e "\tAdding ip ${ipAddressNetmask} to its authorized IP ranges..."
+#                    updatedAuthorizedIpRanges=""
+#                    updatedAuthorizedIpRanges=$(echo "${authorizedIpRangesJson}" | jq -r ". += [\"${ipAddressNetmask}\"] | join(\",\")")
+#                    az aks update -n "${aks}" -g "${resourceGroup}" --api-server-authorized-ip-ranges ${updatedAuthorizedIpRanges} -o none
+#                    echo -e "\tChecking access to it..."
+#                    az aks get-credentials --resource-group ${resourceGroup} --name ${aks} >/dev/null 2>&1
+#                    set +e
+#                    #kubectl get nodes -v 7 --request-timeout='5s' >/dev/null 2>&1
+#                    kubectl get nodes --request-timeout='5s' >/dev/null 2>&1
+#                    while [[ $? -ne 0 ]]; do
+#                      echo -n "."
+#                      sleep 5
+#                      kubectl get nodes --request-timeout='5s' >/dev/null 2>&1
+#                    done
+#                    set -e
+#                  fi
+#                done
+#                #define output variable to be used in last azure cli task
+#                echo "##vso[task.setvariable variable=agent_job_ip;]$ipAddress"
+#                echo "##vso[task.setvariable variable=agent_job_ip_netmask;]$ipAddressNetmask"
+#            displayName: 'Allow azure devops vm agent to access various restricted azure resources'
+#            enabled: true
+          - bash: |
+              set -euo pipefail
+              curl -sOL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+              curl -sOL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_SHA256SUMS"
+              cat "terraform_${TERRAFORM_VERSION}_SHA256SUMS" | sha256sum --check --ignore-missing
+              unzip "terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+              sudo mv terraform /usr/local/bin
+              terraform --version
+              rm "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" "terraform_${TERRAFORM_VERSION}_SHA256SUMS"
+            displayName: 'Donwload Terraform'
+            env:
+              TERRAFORM_VERSION: $(terraform_version)
+          - bash: |
+              set -euo pipefail
+              cd ${{parameters.folder}}
+              echo -e "\nTerraform apply for ${{parameters.folder}} ...\n"
+              # because we cant garante the usage of the same agent/ip between job the solution is to remove the tfplan and use only the artifact with folder content
+              # The -var and -var-file options cannot be used when aplying a saved plan
+              #terraform apply -input=false -var environment_terraform_agent_ip=$(agent_job_ip) -auto-approve "${{parameters.pipelineDeployment}}-${{parameters.folder}}.tfplan"
+              terraform apply -input=false -auto-approve
+              # https://support.hashicorp.com/hc/en-us/articles/4405950960147-New-Feature-Objects-have-changed-outside-of-Terraform-
+              terraform apply -input=false -refresh-only -auto-approve
+            displayName: 'Terraform Apply'
+            env:
+              TF_VAR_vm_password: $(TF-VAR-vm-password)
+              TF_VAR_vm_username: $(TF-VAR-vm-username)
+              TF_VAR_azure_devops_service_principal_object_id: $(SP-OBJECT-ID)
+              TF_VAR_terraform_state_resource_group: $(TARGET-RS-RG)
+              TF_VAR_terraform_state_storage_account: $(TARGET-RS-STORAGE-ACCOUNT)
+              TF_VAR_azure_devops_pipeline_key_vault: $(TARGET-DEVOPS-KEYVAULT)
+              TF_VAR_terraform_state_container: $(TARGET-RS-CONTAINER-NAME)
+              TF_VAR_location: $(TARGET-LOCATION)
+              TF_VAR_environment: $(TARGET-ENV)
+              TF_VAR_environment_qualifier: $(ENVIRONMENT-QUALIFIER)
+              TF_VAR_environment_vnet_cidr: $(CIDR-ALLOCATION)
+              TF_VAR_aks_vnet_cidr: $(CIDR-AKS-ALLOCATION)
+              TF_VAR_databrick_vnet_cidr: $(CIDR-DBW-ALLOCATION)
+              TF_VAR_create_vm: $(TF-VAR-CREATE-VM)
+              TF_VAR_deployments: $(TF-VAR-DEPLOYMENTS)
+              TF_VAR_log_analytics_workspace_sku: $(TF-VAR-LOG-ANALYTICS-WORKSPACE-SKU)
+              TF_VAR_log_analytics_workspace_retention: $(TF-VAR-LOG-ANALYTICS-WORKSPACE-RETENTION)
+              TF_VAR_gateway_https_domain: $(TF-VAR-GATEWAY-HTTPS-DOMAIN)
+              TF_VAR_gateway_https_subdomains: $(TF-VAR-GATEWAY-HTTPS-SUBDOMAINS)
+              TF_VAR_gateway_https_certificate_exists: $(TF-VAR-GATEWAY-HTTPS-CERTIFICATES-EXISTS)
+              TF_VAR_environment_terraform_agent_ip: $(agent_job_ip)
+              TF_VAR_environment_terraform_agent_ip_netmask: $(agent_job_ip_netmask)
+              TF_VAR_ado_agent_docker_registry_username: $(SP-APP-ID-ACR-PULL)
+              TF_VAR_ado_agent_docker_registry_password: $(SP-APP-PW-ACR-PULL)
+              TF_VAR_ado_linux_agent_count: $(ACI-ADO-AGENT-ACOUNT)
+              TF_VAR_azure_devops_personal_access_token: $(ACI-ADO-AGENT-PAT)
+              TF_VAR_aci_vnet_cidr: $(CIDR-ACI-ALLOCATION)
+              ARM_CLIENT_ID: $(SP-APP-ID)
+              ARM_CLIENT_SECRET: $(SP-APP-PW)
+              ARM_SUBSCRIPTION_ID: $(AZ-SUB-ID)
+              ARM_TENANT_ID: $(SP-APP-TENANT-ID)
+#          - task: AzureCLI@2
+#            condition: not(contains(variables['Agent.Name'], 'aci-linux-ado-agents'))
+#            inputs:
+#              azureSubscription: ${{ parameters.azureSubscription }}
+#              scriptType: 'bash'
+#              scriptLocation: 'inlineScript'
+#              inlineScript: |
+#                set -euo pipefail
+#                #set -x
+#                # storage accounts
+#                storageAccountListJson=$(az storage account list -o json)
+#                for storageAccount in $(echo "${storageAccountListJson}" | jq -r '.[] | select (.tags | (has("terraform") and (has("databricks-environment") | not))) | .name' ); do
+#                  echo -e "Checking ${storageAccount} for its authorized IP ranges ..."
+#                  resourceGroup=""
+#                  resourceGroup=$(echo "${storageAccountListJson}" | jq -r ".[] | select (.name == \"${storageAccount}\") | .resourceGroup")
+#                  networkListJson=""
+#                  networkListJson=$(az storage account network-rule list -n "${storageAccount}" -g "${resourceGroup}")
+#                  if [[ -n "${networkListJson}" ]]; then
+#                    authorizedIP=""
+#                    authorizedIP=$(echo "${networkListJson}" | jq -r ".ipRules[] | select( .action == \"Allow\" ) | .ipAddressOrRange " | jq --raw-input . | jq --slurp . | jq -r "select(.[] | contains(\"$(agent_job_ip)\"))")
+#                    if [[ -z "${authorizedIP}" ]]; then
+#                      echo -e "\tRemoving ip $(agent_job_ip) to its authorized IP ranges..."
+#                      az storage account network-rule remove -n ${storageAccount} -g ${resourceGroup} --ip-address $(agent_job_ip) -o none
+#                    fi
+#                  fi
+#                done
+#                # key vault
+#                keyVaultListJson=$(az keyvault list -o json)
+#                for keyVault in $(echo "${keyVaultListJson}" | jq -r '.[] | select (.tags | has("terraform")) | .name'); do
+#                  echo -e "Checking ${keyVault} for its authorized IP ranges ..."
+#                  resourceGroup=""
+#                  resourceGroup=$(echo "${keyVaultListJson}" | jq -r ".[] | select (.name == \"${keyVault}\") | .resourceGroup")
+#                  networkListJson=""
+#                  networkListJson=$(az keyvault network-rule list -n "${keyVault}" -g "${resourceGroup}")
+#                  if [[ -n "${networkListJson}" ]]; then
+#                    authorizedIP=""
+#                    authorizedIP=$(echo "${networkListJson}" | jq -r "select( .defaultAction == \"Deny\" ) | .ipRules[] | select(.value | contains(\"$(agent_job_ip_netmask)\"))")
+#                    if [[ -n "${authorizedIP}" ]]; then
+#                      echo -e "\tRemoving ip $(agent_job_ip_netmask) to its authorized IP ranges..."
+#                      az keyvault network-rule remove -n "${keyVault}" -g "${resourceGroup}" --ip-address $(agent_job_ip_netmask) -o none
+#                    fi
+#                  fi
+#                done
+#                # aks
+#                aksListJson=$(az aks list -o json)
+#                for aks in $(echo "${aksListJson}" | jq -r '.[] | select (.agentPoolProfiles[] |.tags // empty | has("terraform")) | .name'); do
+#                  echo -e "Checking ${aks} for its authorized IP ranges ..."
+#                  resourceGroup=""
+#                  resourceGroup=$(echo "${aksListJson}" | jq -r ".[] | select (.name == \"${aks}\") | .resourceGroup")
+#                  authorizedIpRangesJson=""
+#                  authorizedIpRangesJson=$(echo "${aksListJson}" | jq -r ".[] | .apiServerAccessProfile | select (.authorizedIpRanges | length > 0) | .authorizedIpRanges")
+#                  if [[ -n "${authorizedIpRangesJson}" ]]; then
+#                    authorizedIP=""
+#                    authorizedIP=$(echo "${authorizedIpRangesJson}" | jq -r ".[] | select(. | contains(\"$(agent_job_ip_netmask)\"))")
+#                    if [[ -n "${authorizedIP}" ]]; then
+#                      echo -e "\tRemoving ip $(agent_job_ip_netmask) to its authorized IP ranges..."
+#                      updatedAuthorizedIpRanges=""
+#                      updatedAuthorizedIpRanges=$(echo "${authorizedIpRangesJson}" | jq -r ". -= [\"$(agent_job_ip_netmask)\"] | join(\",\")")
+#                      az aks update -n "${aks}" -g "${resourceGroup}" --api-server-authorized-ip-ranges ${updatedAuthorizedIpRanges} -o none
+#                    fi
+#                  fi
+#                done
+#            displayName: 'Remove access from azure devops vm agent to restricted azure resources'
+#            enabled: true

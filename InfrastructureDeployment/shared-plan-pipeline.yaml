@@ -1,0 +1,137 @@
+# https://docs.microsoft.com/en-us/azure/devops/pipelines/yaml-schema?view=azure-devops&tabs=schema%2Cparameter-schema#checkout
+# https://docs.microsoft.com/en-us/azure/devops/pipelines/yaml-schema?view=azure-devops&tabs=schema%2Cparameter-schema#bash
+
+parameters:
+- name: environmentName
+  type: string
+  default: ''
+- name: artifactName
+  type: string
+  default: ''
+
+stages:
+- stage: plan
+  jobs:
+  - job: terraform
+    displayName: 'Build Terraform plan artifact(s)'
+    steps:
+    - checkout: self
+      lfs: false
+      submodules: false
+    - bash: |
+        set -euo pipefail
+        curl -sOL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+        curl -sOL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_SHA256SUMS"
+        cat "terraform_${TERRAFORM_VERSION}_SHA256SUMS" | sha256sum --check --ignore-missing
+        unzip "terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+        sudo mv terraform /usr/local/bin
+        terraform --version
+        rm "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" "terraform_${TERRAFORM_VERSION}_SHA256SUMS"
+      displayName: 'Download Terraform'
+      env:
+        TERRAFORM_VERSION: $(terraform_version)
+    - bash: |
+        set -euo pipefail
+        for folder in ado-automation infra-primary data-primary app-primary; do
+          cd ${folder}
+          echo -e "\n Terraform init for ${folder} ...\n"
+          terraform init --input=false
+          cd ..
+        done
+      displayName: 'Terraform Init'
+      env:
+        TF_VAR_azure_devops_service_principal_object_id: $(SP-OBJECT-ID)
+        TF_VAR_terraform_state_resource_group: $(TARGET-RS-RG)
+        TF_VAR_terraform_state_storage_account: $(TARGET-RS-STORAGE-ACCOUNT)
+        TF_VAR_azure_devops_pipeline_key_vault: $(TARGET-DEVOPS-KEYVAULT)
+        TF_VAR_terraform_state_container: $(TARGET-RS-CONTAINER-NAME)
+        TF_VAR_location: $(TARGET-LOCATION)
+        TF_VAR_environment: $(TARGET-ENV)
+        TF_VAR_environment_qualifier: $(ENVIRONMENT-QUALIFIER)
+        TF_VAR_environment_vnet_cidr: $(CIDR-ALLOCATION)
+        TF_VAR_aks_vnet_cidr: $(CIDR-AKS-ALLOCATION)
+        TF_VAR_databrick_vnet_cidr: $(CIDR-DBW-ALLOCATION)
+        TF_VAR_create_vm: $(TF-VAR-CREATE-VM)
+        TF_VAR_deployments: $(TF-VAR-DEPLOYMENTS)
+        TF_VAR_log_analytics_workspace_sku: $(TF-VAR-LOG-ANALYTICS-WORKSPACE-SKU)
+        TF_VAR_log_analytics_workspace_retention: $(TF-VAR-LOG-ANALYTICS-WORKSPACE-RETENTION)
+        TF_VAR_gateway_https_domain: $(TF-VAR-GATEWAY-HTTPS-DOMAIN)
+        TF_VAR_gateway_https_subdomains: $(TF-VAR-GATEWAY-HTTPS-SUBDOMAINS)
+        TF_VAR_gateway_https_certificate_exists: $(TF-VAR-GATEWAY-HTTPS-CERTIFICATES-EXISTS)
+        TF_VAR_vm_password: $(TF-VAR-vm-password)
+        TF_VAR_vm_username: $(TF-VAR-vm-username)
+        ARM_CLIENT_ID: $(SP-APP-ID)
+        ARM_CLIENT_SECRET: $(SP-APP-PW)
+        ARM_SUBSCRIPTION_ID: $(AZ-SUB-ID)
+        ARM_TENANT_ID: $(SP-APP-TENANT-ID)
+    - bash: |
+        set -euo pipefail
+        for folder in ado-automation infra-primary data-primary app-primary; do
+          cd ${folder}
+          echo -e "\nTerraform validate for ${folder} ...\n"
+          terraform validate
+          cd ..
+        done
+      displayName: 'Terraform Validate'
+    - bash: |
+        set -euo pipefail
+        for folder in ado-automation infra-primary data-primary app-primary; do
+          cd ${folder}
+          echo -e "\nTerraform plan for ${folder} ...\n"
+          terraform plan -input=false -out "${folder}-${DEPLOYMENT}.tfplan"
+          cd ..
+        done
+        tfplans=$(find . -name '*.tfplan' -type f | wc -l)
+        echo "Were created ${tfplans} terraform plan(s) ..."
+        if [ "${tfplans}" -ge "0" ]; then
+          echo "##vso[task.setvariable variable=exists;isoutput=true]yes"
+        else
+          echo "##vso[task.setvariable variable=exists;isoutput=true]no"
+        fi
+      name: artifact
+      displayName: 'Terraform Plan'
+      env:
+        TF_VAR_azure_devops_service_principal_object_id: $(SP-OBJECT-ID)
+        TF_VAR_terraform_state_resource_group: $(TARGET-RS-RG)
+        TF_VAR_terraform_state_storage_account: $(TARGET-RS-STORAGE-ACCOUNT)
+        TF_VAR_azure_devops_pipeline_key_vault: $(TARGET-DEVOPS-KEYVAULT)
+        TF_VAR_terraform_state_container: $(TARGET-RS-CONTAINER-NAME)
+        TF_VAR_location: $(TARGET-LOCATION)
+        TF_VAR_environment: $(TARGET-ENV)
+        TF_VAR_environment_qualifier: $(ENVIRONMENT-QUALIFIER)
+        TF_VAR_environment_vnet_cidr: $(CIDR-ALLOCATION)
+        TF_VAR_aks_vnet_cidr: $(CIDR-AKS-ALLOCATION)
+        TF_VAR_databrick_vnet_cidr: $(CIDR-DBW-ALLOCATION)
+        TF_VAR_create_vm: $(TF-VAR-CREATE-VM)
+        TF_VAR_deployments: $(TF-VAR-DEPLOYMENTS)
+        TF_VAR_log_analytics_workspace_sku: $(TF-VAR-LOG-ANALYTICS-WORKSPACE-SKU)
+        TF_VAR_log_analytics_workspace_retention: $(TF-VAR-LOG-ANALYTICS-WORKSPACE-RETENTION)
+        TF_VAR_gateway_https_domain: $(TF-VAR-GATEWAY-HTTPS-DOMAIN)
+        TF_VAR_gateway_https_subdomains: $(TF-VAR-GATEWAY-HTTPS-SUBDOMAINS)
+        TF_VAR_gateway_https_certificate_exists: $(TF-VAR-GATEWAY-HTTPS-CERTIFICATES-EXISTS)
+        TF_VAR_vm_password: $(TF-VAR-vm-password)
+        TF_VAR_vm_username: $(TF-VAR-vm-username)
+        ARM_CLIENT_ID: $(SP-APP-ID)
+        ARM_CLIENT_SECRET: $(SP-APP-PW)
+        ARM_SUBSCRIPTION_ID: $(AZ-SUB-ID)
+        ARM_TENANT_ID: $(SP-APP-TENANT-ID)
+    - task: ArchiveFiles@2
+      condition: eq(variables['artifact.exists'], 'yes')
+      inputs:
+        rootFolderOrFile: '$(Build.SourcesDirectory)'
+        includeRootFolder: false
+        archiveType: 'tar'
+        tarCompression: gz
+        archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).tgz'
+        replaceExistingArchive: true
+      displayName: 'Create artifact with Terraform plan'
+      enabled: true
+    - task: PublishBuildArtifacts@1
+      condition: eq(variables['artifact.exists'], 'yes')
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: '${{parameters.artifactName}}'
+        publishLocation: 'Container'
+      displayName: 'Publish artifact to Azure Pipelines'
+      enabled: true
+

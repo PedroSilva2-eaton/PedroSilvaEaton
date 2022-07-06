@@ -1,0 +1,45 @@
+{
+  "scriptFile": "__init__.py",
+  "bindings": [
+    {
+      "authLevel": "anonymous",
+      "type": "httpTrigger",
+      "direction": "in",
+      "name": "req",
+      "methods": [
+        "get",
+        "post"
+      ]
+    },
+    {
+      "type": "http",
+      "direction": "out",
+      "name": "$return"
+    },
+    {
+      "name": "documents",
+      "type": "cosmosDB",
+      "databaseName": "eaton-cosmos-mongodb",
+      "collectionName": "test_datas",
+      "partitionKey": "",
+      "connectionStringSetting": "etncosmosdbaccount_DOCUMENTDB",
+      "direction": "in"
+    },
+    {
+      "name": "outputblob",
+      "type": "blob",
+      "dataType": "binary",
+      "path": "loadforecastsc/testDatas.txt",
+      "connection": "AzureWebJobsStorage",
+      "direction": "out"
+    },
+    {
+      "name": "outputblobtable",
+      "type": "table",
+      "tableName": "testdatas",
+      "partitionKey": "message",
+      "connection": "AzureWebJobsStorage",
+      "direction": "out"
+    }
+  ]
+}

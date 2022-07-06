@@ -1,0 +1,33 @@
+trigger:
+  - master
+  - features/*
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - name: terraform_version
+    value: 1.1.3
+  - name: deployment
+    ${{ if startsWith(variables['Build.SourceBranch'], 'refs/tags/PROD-') }}:
+      value: PROD
+    ${{ elseif eq(variables['Build.SourceBranch'], 'refs/heads/master') }}:
+      value: DEV
+    ${{ elseif startsWith(variables['Build.SourceBranch'], 'refs/heads/features') }}:
+      value: QA
+  - group: ${{ format('ADO-{0}-Group', variables['deployment']) }}
+  - name: Environment
+    value: ${{ format('terraform-{0}', lower(variables['deployment'])) }}
+  - name: Artifact
+    value: ${{ format('terraform-{0}-plan', lower(variables['deployment'])) }}
+
+stages:
+  - template: shared-plan-pipeline.yaml
+    parameters:
+      environmentName: ${{ variables.Environment }}
+      artifactName: ${{ variables.Artifact }}
+  - template: shared-deploy-pipeline.yaml
+    parameters:
+      environmentName: ${{ variables.Environment }}
+      artifactName: ${{ variables.Artifact }}
+

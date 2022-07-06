@@ -1,0 +1,92 @@
+# https://docs.microsoft.com/en-us/azure/devops/pipelines/yaml-schema?view=azure-devops&tabs=schema%2Cparameter-schema#checkout
+# https://docs.microsoft.com/en-us/azure/devops/pipelines/yaml-schema?view=azure-devops&tabs=schema%2Cparameter-schema#bash
+# https://docs.microsoft.com/en-us/azure/devops/pipelines/build/variables?view=azure-devops&tabs=yaml
+# https://docs.microsoft.com/en-us/azure/devops/pipelines/process/expressions?view=azure-devops
+
+parameters:
+- name: environmentName
+  type: string
+  default: ''
+- name: artifactName
+  type: string
+  default: ''
+
+stages:
+- stage: deploy
+  dependsOn: plan
+  jobs:
+  - deployment: terraform
+    condition: eq(stageDependencies.plan.terraform.outputs['artifact.exists'], 'yes')
+    displayName: 'Deployment of Terraform plan'
+    environment: ${{ parameters.environmentName }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: none
+          - task: DownloadBuildArtifacts@0
+            inputs:
+              buildType: 'current'
+              downloadType: 'single'
+              artifactName: '${{parameters.artifactName}}'
+              downloadPath: '$(System.ArtifactsDirectory)'
+            displayName: 'Download Terraform plan artifact'
+          - task: ExtractFiles@1
+            inputs:
+              archiveFilePatterns: '$(System.ArtifactsDirectory)/${{parameters.artifactName}}/$(Build.BuildId).tgz'
+              destinationFolder: '$(System.DefaultWorkingDirectory)'
+              cleanDestinationFolder: false
+              overwriteExistingFiles: false
+            displayName: 'Extract Terraform plan artifact'
+          - bash: |
+              set -euo pipefail
+              curl -sOL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+              curl -sOL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_SHA256SUMS"
+              cat "terraform_${TERRAFORM_VERSION}_SHA256SUMS" | sha256sum --check --ignore-missing
+              unzip "terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+              sudo mv terraform /usr/local/bin
+              terraform --version
+              rm "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" "terraform_${TERRAFORM_VERSION}_SHA256SUMS"
+            displayName: 'Donwload Terraform'
+            env:
+              TERRAFORM_VERSION: $(terraform_version)
+          - bash: |
+              set -euo pipefail
+              for folder in ado-automation infra-primary data-primary app-primary; do
+                cd ${folder}
+                echo -e "\nTerraform apply for ${folder} ...\n"
+                terraform apply -input=false -auto-approve "${folder}-${DEPLOYMENT}.tfplan"
+                echo -e "\nChecking if we need to update terraform state with Azure added information ...\n"
+                # https://support.hashicorp.com/hc/en-us/articles/4405950960147-New-Feature-Objects-have-changed-outside-of-Terraform-
+                if [ $(terraform plan -input=false -refresh-only -out "${folder}-${DEPLOYMENT}-refresh.tfplan" | grep "Objects have changed outside of Terraform" | wc -l) -eq 1  ]; then
+                  terraform apply -input=false -auto-approve "${folder}-${DEPLOYMENT}-refresh.tfplan"
+                fi
+                cd ..
+              done
+            displayName: 'Terraform Apply'
+            env:
+              TF_VAR_azure_devops_service_principal_object_id: $(SP-OBJECT-ID)
+              TF_VAR_terraform_state_resource_group: $(TARGET-RS-RG)
+              TF_VAR_terraform_state_storage_account: $(TARGET-RS-STORAGE-ACCOUNT)
+              TF_VAR_azure_devops_pipeline_key_vault: $(TARGET-DEVOPS-KEYVAULT)
+              TF_VAR_terraform_state_container: $(TARGET-RS-CONTAINER-NAME)
+              TF_VAR_location: $(TARGET-LOCATION)
+              TF_VAR_environment: $(TARGET-ENV)
+              TF_VAR_environment_qualifier: $(ENVIRONMENT-QUALIFIER)
+              TF_VAR_environment_vnet_cidr: $(CIDR-ALLOCATION)
+              TF_VAR_aks_vnet_cidr: $(CIDR-AKS-ALLOCATION)
+              TF_VAR_databrick_vnet_cidr: $(CIDR-DBW-ALLOCATION)
+              TF_VAR_create_vm: $(TF-VAR-CREATE-VM)
+              TF_VAR_deployments: $(TF-VAR-DEPLOYMENTS)
+              TF_VAR_log_analytics_workspace_sku: $(TF-VAR-LOG-ANALYTICS-WORKSPACE-SKU)
+              TF_VAR_log_analytics_workspace_retention: $(TF-VAR-LOG-ANALYTICS-WORKSPACE-RETENTION)
+              TF_VAR_gateway_https_domain: $(TF-VAR-GATEWAY-HTTPS-DOMAIN)
+              TF_VAR_gateway_https_subdomains: $(TF-VAR-GATEWAY-HTTPS-SUBDOMAINS)
+              TF_VAR_gateway_https_certificate_exists: $(TF-VAR-GATEWAY-HTTPS-CERTIFICATES-EXISTS)
+              TF_VAR_vm_password: $(TF-VAR-vm-password)
+              TF_VAR_vm_username: $(TF-VAR-vm-username)
+              ARM_CLIENT_ID: $(SP-APP-ID)
+              ARM_CLIENT_SECRET: $(SP-APP-PW)
+              ARM_SUBSCRIPTION_ID: $(AZ-SUB-ID)
+              ARM_TENANT_ID: $(SP-APP-TENANT-ID)
+
